@@ -1,0 +1,269 @@
+/* Swappy Dark Theme */
+
+/* Main window */
+window {
+  background-color: #1a1a1a;
+}
+
+/* Drawing area */
+#draw-area {
+  background-color: #1a1a1a;
+}
+
+/* Toolbar container */
+.toolbar-box {
+  background-color: #121212;
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin: 8px;
+}
+
+/* Tool buttons */
+.tool-button {
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-width: 42px;
+  color: #666666;
+}
+
+.tool-button:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.tool-button:checked,
+.tool-button.active {
+  background-color: rgba(74, 158, 255, 0.1);
+  color: #4a9eff;
+}
+
+.tool-button.draw-tool:checked {
+  background-color: rgba(74, 158, 255, 0.1);
+  color: #4a9eff;
+}
+
+.tool-button.text-tool:checked {
+  background-color: rgba(255, 159, 74, 0.1);
+  color: #ff9f4a;
+}
+
+.tool-button.export-tool:checked {
+  background-color: rgba(74, 222, 128, 0.1);
+  color: #4ade80;
+}
+
+/* Tool button labels */
+.tool-button label {
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.tool-button:checked label {
+  font-weight: 600;
+}
+
+/* Action buttons (undo, redo, settings) */
+.action-button {
+  background-color: #222222;
+  border: none;
+  border-radius: 6px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 4px;
+  color: #666666;
+}
+
+.action-button:hover {
+  background-color: #2a2a2a;
+  color: #888888;
+}
+
+/* Separator */
+.toolbar-separator {
+  background-color: #333333;
+  min-width: 1px;
+  margin: 0 4px;
+}
+
+/* Color picker panel */
+.color-panel {
+  background-color: #141414;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+/* Color grid */
+.color-grid {
+  background-color: #0a0a0a;
+  border-radius: 4px;
+  padding: 6px;
+}
+
+/* Color buttons */
+.color-button {
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  padding: 0;
+}
+
+.color-button:checked {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+}
+
+/* Stroke/Fill toggle */
+.stroke-fill-toggle {
+  background-color: #2a2a2a;
+  border-radius: 4px;
+}
+
+.stroke-fill-toggle button {
+  padding: 5px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 2px solid transparent;
+  background: transparent;
+  color: #666666;
+}
+
+.stroke-fill-toggle button:checked {
+  border-color: #ffffff;
+  color: #ffffff;
+}
+
+/* Fill toggle button */
+.fill-toggle {
+  background-color: #2a2a2a;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: #666666;
+}
+
+.fill-toggle:checked {
+  background-color: #4a9eff;
+  color: #ffffff;
+}
+
+/* Properties panel */
+.properties-panel {
+  background-color: #141414;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+/* Sliders */
+.properties-panel scale {
+  margin: 0 8px;
+}
+
+.properties-panel scale trough {
+  background-color: #2a2a2a;
+  border-radius: 2px;
+  min-height: 4px;
+}
+
+.properties-panel scale highlight {
+  background-color: #4a9eff;
+  border-radius: 2px;
+}
+
+.properties-panel scale slider {
+  background-color: #4a9eff;
+  border-radius: 50%;
+  min-width: 14px;
+  min-height: 14px;
+}
+
+/* Labels */
+.properties-panel label {
+  color: #555555;
+  font-size: 10px;
+}
+
+.properties-panel .value-label {
+  color: #888888;
+  font-size: 11px;
+}
+
+/* Dropdown/Combo */
+.properties-panel combobox button {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+  border-radius: 4px;
+  color: #aaaaaa;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+/* Save location */
+.save-location {
+  background-color: #141414;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.save-location label {
+  color: #888888;
+  font-size: 11px;
+}
+
+.save-location .path-label {
+  color: #444444;
+  font-size: 10px;
+}
+
+/* Color name label */
+.color-name {
+  color: #666666;
+  font-size: 10px;
+  font-style: italic;
+}
+
+/* Scrolled window for panels */
+scrolledwindow {
+  background-color: transparent;
+}
+
+/* Spin buttons */
+spinbutton {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+  border-radius: 4px;
+  color: #cccccc;
+  font-size: 11px;
+}
+
+spinbutton text {
+  background-color: transparent;
+  color: #cccccc;
+}
+
+/* Entry fields */
+entry {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+  border-radius: 4px;
+  color: #cccccc;
+  padding: 4px 8px;
+}
+
+/* Popover menus */
+popover {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+}
+
+popover modelbutton {
+  color: #cccccc;
+  padding: 6px 12px;
+}
+
+popover modelbutton:hover {
+  background-color: #2a2a2a;
+}

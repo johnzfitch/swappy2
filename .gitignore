@@ -1,0 +1,24 @@
+# Build directories
+build/
+builddir/
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Compiled objects
+*.o
+*.so
+*.a
+
+# Generated files
+src/po/*.mo
+res/swappy.c
+res/swappy.h
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,404 @@
+/* Swappy Dark Theme */
+
+/* Main window */
+window, window.background {
+  background-color: #1a1a1a;
+}
+
+/* Drawing area */
+#draw-area {
+  background-color: #202020;
+}
+
+/* Header bar / Toolbar area */
+headerbar, .toolbar {
+  background-color: #121212;
+  border: none;
+  box-shadow: none;
+}
+
+/* Main box containers */
+box {
+  background-color: transparent;
+}
+
+.toolbar-box, .panel-box {
+  background-color: #121212;
+  border-radius: 8px;
+  padding: 6px;
+  margin: 4px;
+}
+
+/* All buttons base */
+button {
+  background-color: #222222;
+  background-image: none;
+  border: none;
+  border-radius: 6px;
+  box-shadow: none;
+  color: #888888;
+  min-height: 24px;
+  padding: 4px 8px;
+}
+
+button:hover {
+  background-color: #2a2a2a;
+  color: #aaaaaa;
+}
+
+button:active, button:checked {
+  background-color: #333333;
+}
+
+/* Toggle buttons (tool selection) */
+togglebutton, radiobutton {
+  background-color: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 6px;
+  color: #666666;
+}
+
+togglebutton:hover, radiobutton:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+togglebutton:checked, radiobutton:checked {
+  background-color: rgba(74, 158, 255, 0.12);
+  color: #4a9eff;
+}
+
+/* Draw tools - blue accent */
+.draw-tool:checked {
+  background-color: rgba(74, 158, 255, 0.12);
+  color: #4a9eff;
+}
+
+/* Text tools - orange accent */
+.text-tool:checked {
+  background-color: rgba(255, 159, 74, 0.12);
+  color: #ff9f4a;
+}
+
+/* Export tools - green accent */
+.export-tool:checked {
+  background-color: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+}
+
+/* Separator */
+separator {
+  background-color: #333333;
+  min-width: 1px;
+  min-height: 1px;
+  margin: 2px 6px;
+}
+
+/* Labels */
+label {
+  color: #888888;
+}
+
+.dim-label {
+  color: #555555;
+}
+
+/* Scales/Sliders */
+scale {
+  padding: 8px 0;
+}
+
+scale trough {
+  background-color: #2a2a2a;
+  border-radius: 3px;
+  min-height: 6px;
+}
+
+scale highlight {
+  background-color: #4a9eff;
+  border-radius: 3px;
+  min-height: 6px;
+}
+
+scale slider {
+  background-color: #4a9eff;
+  border-radius: 50%;
+  min-width: 16px;
+  min-height: 16px;
+  margin: -5px;
+}
+
+scale slider:hover {
+  background-color: #5aaeFF;
+}
+
+/* Spin buttons */
+spinbutton {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+  border-radius: 4px;
+  color: #cccccc;
+  padding: 2px 6px;
+}
+
+spinbutton text {
+  background-color: transparent;
+  color: #cccccc;
+}
+
+spinbutton button {
+  background-color: transparent;
+  border: none;
+  min-width: 20px;
+  padding: 0;
+  color: #666666;
+}
+
+spinbutton button:hover {
+  color: #aaaaaa;
+}
+
+/* Combo boxes */
+combobox button {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+  border-radius: 4px;
+  color: #aaaaaa;
+  padding: 4px 8px;
+}
+
+combobox button:hover {
+  background-color: #222222;
+  border-color: #444444;
+}
+
+combobox arrow {
+  color: #666666;
+  min-width: 14px;
+  min-height: 14px;
+}
+
+/* Entries */
+entry {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+  border-radius: 4px;
+  color: #cccccc;
+  padding: 4px 8px;
+}
+
+entry:focus {
+  border-color: #4a9eff;
+}
+
+/* Color buttons */
+.color-button {
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  padding: 0;
+}
+
+.color-button:checked {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
+}
+
+/* Color chooser button */
+colorbutton button {
+  border-radius: 4px;
+  padding: 2px;
+}
+
+/* File chooser button */
+filechooserbutton button {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+  border-radius: 4px;
+  color: #888888;
+  padding: 4px 10px;
+}
+
+/* Popovers */
+popover, popover.background {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+  border-radius: 8px;
+}
+
+popover modelbutton {
+  color: #cccccc;
+  padding: 6px 12px;
+  border-radius: 4px;
+}
+
+popover modelbutton:hover {
+  background-color: #2a2a2a;
+}
+
+/* Menu */
+menu, menubar {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+}
+
+menuitem {
+  color: #cccccc;
+  padding: 6px 12px;
+}
+
+menuitem:hover {
+  background-color: #2a2a2a;
+}
+
+/* Scrollbar */
+scrollbar {
+  background-color: transparent;
+}
+
+scrollbar slider {
+  background-color: #444444;
+  border-radius: 4px;
+  min-width: 8px;
+  min-height: 8px;
+}
+
+scrollbar slider:hover {
+  background-color: #555555;
+}
+
+/* Legacy color box support */
+.color-box button {
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.color-box image {
+  border-radius: 50px;
+}
+
+.color-box .color-red image {
+  background-color: #FF0000;
+}
+
+.color-box .color-green image {
+  background-color: #00CC00;
+}
+
+.color-box .color-blue image {
+  background-color: #0066FF;
+}
+
+/* Drawing tools styling */
+.drawing .text-button {
+  padding: 4px;
+}
+
+.drawing .text-button radio,
+.color-box .text-button radio {
+  padding: 0;
+}
+
+/* Panel styling */
+.panel {
+  background-color: #141414;
+  border-radius: 6px;
+  padding: 8px;
+  margin: 2px;
+}
+
+/* Font button */
+fontbutton button {
+  background-color: #1a1a1a;
+  border: 1px solid #333333;
+  color: #aaaaaa;
+}
+
+/* Image/Icon styling */
+image {
+  color: #888888;
+}
+
+button:checked image {
+  color: inherit;
+}
+
+/* Mac Crayon Color Palette */
+.color-cayenne { background-color: #8B0000; }
+.color-maraschino { background-color: #FF0000; }
+.color-tangerine { background-color: #FF8000; }
+.color-lemon { background-color: #FFFF00; }
+.color-lime { background-color: #00FF00; }
+.color-spring { background-color: #00FF80; }
+.color-turquoise { background-color: #00FFFF; }
+.color-aqua { background-color: #0080FF; }
+.color-blueberry { background-color: #0000FF; }
+.color-grape { background-color: #8000FF; }
+.color-magenta { background-color: #FF00FF; }
+.color-strawberry { background-color: #FF0080; }
+.color-licorice { background-color: #000000; }
+.color-iron { background-color: #4D4D4D; }
+.color-nickel { background-color: #808080; }
+.color-aluminum { background-color: #B3B3B3; }
+.color-snow { background-color: #FFFFFF; }
+.color-mocha { background-color: #804000; }
+
+/* Color button hover effects */
+.color-cayenne:hover,
+.color-maraschino:hover,
+.color-tangerine:hover,
+.color-lemon:hover,
+.color-lime:hover,
+.color-spring:hover,
+.color-turquoise:hover,
+.color-aqua:hover,
+.color-blueberry:hover,
+.color-grape:hover,
+.color-magenta:hover,
+.color-strawberry:hover,
+.color-licorice:hover,
+.color-iron:hover,
+.color-nickel:hover,
+.color-aluminum:hover,
+.color-snow:hover,
+.color-mocha:hover {
+  opacity: 0.85;
+  transform: scale(1.05);
+}
+
+/* Stroke/Fill toggle styling */
+.stroke-fill-toggle {
+  background-color: #1a1a1a;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.stroke-fill-toggle radiobutton {
+  padding: 4px 12px;
+  border-radius: 4px;
+}
+
+.stroke-fill-toggle radiobutton:checked {
+  background-color: #333333;
+}
+
+/* Color name label */
+.color-name {
+  font-size: 11px;
+  color: #666666;
+  margin-top: 4px;
+}
+
+/* Slider labels */
+.slider-label {
+  font-size: 11px;
+  color: #666666;
+  min-width: 50px;
+}
+
+.slider-value {
+  font-size: 11px;
+  color: #888888;
+  min-width: 30px;
+}

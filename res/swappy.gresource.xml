@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+    <gresource prefix="/me/jtheoof/swappy">
+        <file>style/swappy.css</file>
+        <file>swappy.glade</file>
+        <file>icons/brush.svg</file>
+        <file>icons/line.svg</file>
+        <file>icons/arrow.svg</file>
+        <file>icons/rectangle.svg</file>
+        <file>icons/ellipse.svg</file>
+        <file>icons/text.svg</file>
+        <file>icons/highlight.svg</file>
+        <file>icons/blur.svg</file>
+        <file>icons/crop.svg</file>
+        <file>icons/copy.svg</file>
+        <file>icons/save.svg</file>
+        <file>icons/undo.svg</file>
+        <file>icons/redo.svg</file>
+        <file>icons/settings.svg</file>
+    </gresource>
+</gresources>
