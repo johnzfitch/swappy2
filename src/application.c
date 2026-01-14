@@ -661,6 +661,10 @@ void save_as_clicked_handler(GtkWidget *widget, struct swappy_state *state) {
   action_save_as(state);
 }
 
+void close_clicked_handler(GtkWidget *widget, struct swappy_state *state) {
+  gtk_main_quit();
+}
+
 void clear_clicked_handler(GtkWidget *widget, struct swappy_state *state) {
   action_clear(state);
 }
@@ -968,7 +972,7 @@ gboolean draw_area_handler(GtkWidget *widget, cairo_t *cr,
     cairo_set_source_surface(cr, state->rendering_surface, 0, 0);
 
     cairo_pattern_t *pattern = cairo_get_source(cr);
-    cairo_pattern_set_filter(pattern, CAIRO_FILTER_BEST);
+    cairo_pattern_set_filter(pattern, CAIRO_FILTER_NEAREST);
     cairo_paint(cr);
   }
 
