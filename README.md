@@ -2,8 +2,7 @@
 
 A fork of [swappy](https://github.com/jtheoof/swappy) with enhanced features for Wayland-native screenshot editing.
 
-![Swappy Screenshot](docs/images/screenshot-2026-01-18_19-34-58.png)(https://github.com/johnzfitch/swappy2/blob/master/docs/images/screenshot-2026-01-18_19-34-58.png))
-
+![Swappy Screenshot](docs/images/screenshot-2026-01-18_19-34-58.png)
 ---
 
 ## ![rocket-64x64](.github/assets/icons/rocket-64x64.png) Fork Enhancements
