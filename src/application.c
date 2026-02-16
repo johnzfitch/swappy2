@@ -9,6 +9,7 @@
 
 #include "clipboard.h"
 #include "config.h"
+#include "enhance.h"
 #include "file.h"
 #include "paint.h"
 #include "pixbuf.h"
@@ -18,6 +19,248 @@
 
 // Forward declarations
 static void compute_window_size_and_scaling_factor(struct swappy_state *state);
+
+#define UPSCALE_MODE_OFF 0
+#define UPSCALE_MODE_MANUAL_4X 1
+#define UPSCALE_MODE_ESRGAN 2
+#define UPSCALE_MODE_HYPIR 3
+#define UPSCALE_MODE_SUPIR 4
+
+#define UPSCALE_COMMAND_MANUAL_4X \
+  "magick \"%INPUT%\" -filter point -resize 400% \"%OUTPUT%\""
+#define UPSCALE_COMMAND_ESRGAN \
+  "env COMFYUI_PIPELINE=esrgan COMFYUI_UPSCALE_MODEL=RealESRGAN_x4plus.pth /home/zack/dev/swappy2/script/comfy-upscale \"%INPUT%\" \"%OUTPUT%\""
+#define UPSCALE_COMMAND_HYPIR \
+  "env COMFYUI_PIPELINE=hypir COMFYUI_HYPIR_MODEL=HYPIR_sd2 /home/zack/dev/swappy2/script/comfy-upscale \"%INPUT%\" \"%OUTPUT%\""
+#define UPSCALE_COMMAND_SUPIR \
+  "env COMFYUI_PIPELINE=supir COMFYUI_SUPIR_MODEL=SUPIR-v0Q.ckpt /home/zack/dev/swappy2/script/comfy-upscale \"%INPUT%\" \"%OUTPUT%\""
+
+static const char *upscale_command_from_mode(gint mode) {
+  switch (mode) {
+    case UPSCALE_MODE_MANUAL_4X:
+      return UPSCALE_COMMAND_MANUAL_4X;
+    case UPSCALE_MODE_ESRGAN:
+      return UPSCALE_COMMAND_ESRGAN;
+    case UPSCALE_MODE_HYPIR:
+      return UPSCALE_COMMAND_HYPIR;
+    case UPSCALE_MODE_SUPIR:
+      return UPSCALE_COMMAND_SUPIR;
+    case UPSCALE_MODE_OFF:
+    default:
+      return NULL;
+  }
+}
+
+static gint upscale_mode_from_command(const char *command) {
+  if (!command || command[0] == '\0') {
+    return UPSCALE_MODE_OFF;
+  }
+
+  if (g_strcmp0(command, UPSCALE_COMMAND_MANUAL_4X) == 0) {
+    return UPSCALE_MODE_MANUAL_4X;
+  }
+  if (g_strcmp0(command, UPSCALE_COMMAND_ESRGAN) == 0) {
+    return UPSCALE_MODE_ESRGAN;
+  }
+  if (g_strcmp0(command, UPSCALE_COMMAND_HYPIR) == 0) {
+    return UPSCALE_MODE_HYPIR;
+  }
+  if (g_strcmp0(command, UPSCALE_COMMAND_SUPIR) == 0) {
+    return UPSCALE_MODE_SUPIR;
+  }
+
+  return UPSCALE_MODE_OFF;
+}
+
+static void clear_upscaled_preview_cache(struct swappy_state *state) {
+  if (state->upscaled_preview_surface) {
+    cairo_surface_destroy(state->upscaled_preview_surface);
+    state->upscaled_preview_surface = NULL;
+  }
+  if (state->upscaled_pixbuf_cache) {
+    g_object_unref(state->upscaled_pixbuf_cache);
+    state->upscaled_pixbuf_cache = NULL;
+  }
+  state->upscaled_preview_scale_x = 1.0;
+  state->upscaled_preview_scale_y = 1.0;
+  state->upscaled_preview_cache_valid = FALSE;
+}
+
+/* Forward declaration for debounced upscale */
+static gboolean trigger_async_upscale(gpointer user_data);
+
+static void invalidate_upscaled_preview_cache(struct swappy_state *state) {
+  /* Cancel any pending debounced upscale */
+  if (state->upscale_debounce_id) {
+    g_source_remove(state->upscale_debounce_id);
+    state->upscale_debounce_id = 0;
+  }
+
+  clear_upscaled_preview_cache(state);
+
+  /* Schedule debounced async upscale if upscale command is configured */
+  if (state->config->upscale_command && state->config->upscale_command[0] != '\0' &&
+      !state->upscale_in_progress) {
+    state->upscale_debounce_id = g_timeout_add(500, trigger_async_upscale, state);
+  }
+}
+
+/* Callback when async upscale completes */
+static void on_async_upscale_complete(GObject *source, GAsyncResult *result,
+                                      gpointer user_data) {
+  struct swappy_state *state = user_data;
+  GError *error = NULL;
+  GdkPixbuf *upscaled_pixbuf = NULL;
+  int source_width, source_height;
+
+  state->upscale_in_progress = FALSE;
+
+  upscaled_pixbuf = pixbuf_apply_upscale_command_finish(result, &error);
+  if (error) {
+    g_warning("async upscale failed: %s", error->message);
+    g_error_free(error);
+    return;
+  }
+
+  if (!upscaled_pixbuf) {
+    return;
+  }
+
+  /* Get source dimensions from rendering surface */
+  source_width = cairo_image_surface_get_width(state->rendering_surface);
+  source_height = cairo_image_surface_get_height(state->rendering_surface);
+
+  /* Store pixbuf for reuse in save */
+  if (state->upscaled_pixbuf_cache) {
+    g_object_unref(state->upscaled_pixbuf_cache);
+  }
+  state->upscaled_pixbuf_cache = g_object_ref(upscaled_pixbuf);
+
+  /* Create preview surface */
+  if (state->upscaled_preview_surface) {
+    cairo_surface_destroy(state->upscaled_preview_surface);
+  }
+  state->upscaled_preview_surface =
+      gdk_cairo_surface_create_from_pixbuf(upscaled_pixbuf, 1, NULL);
+
+  if (state->upscaled_preview_surface &&
+      cairo_surface_status(state->upscaled_preview_surface) == CAIRO_STATUS_SUCCESS) {
+    state->upscaled_preview_scale_x =
+        (gdouble)gdk_pixbuf_get_width(upscaled_pixbuf) / (gdouble)source_width;
+    state->upscaled_preview_scale_y =
+        (gdouble)gdk_pixbuf_get_height(upscaled_pixbuf) / (gdouble)source_height;
+    if (state->upscaled_preview_scale_x <= 0) {
+      state->upscaled_preview_scale_x = 1.0;
+    }
+    if (state->upscaled_preview_scale_y <= 0) {
+      state->upscaled_preview_scale_y = 1.0;
+    }
+    state->upscaled_preview_cache_valid = TRUE;
+    g_info("async upscale preview cache built (%.2fx, %.2fx)",
+           state->upscaled_preview_scale_x, state->upscaled_preview_scale_y);
+  } else {
+    if (state->upscaled_preview_surface) {
+      cairo_surface_destroy(state->upscaled_preview_surface);
+      state->upscaled_preview_surface = NULL;
+    }
+  }
+
+  g_object_unref(upscaled_pixbuf);
+
+  /* Trigger redraw to show the upscaled preview */
+  if (state->ui && state->ui->area && GTK_IS_WIDGET(state->ui->area)) {
+    gtk_widget_queue_draw(state->ui->area);
+  }
+}
+
+/* Debounced trigger for async upscale */
+static gboolean trigger_async_upscale(gpointer user_data) {
+  struct swappy_state *state = user_data;
+  cairo_surface_t *source_surface;
+  cairo_surface_t *temp_enhanced = NULL;
+  int source_width, source_height;
+  GdkPixbuf *source_pixbuf;
+
+  state->upscale_debounce_id = 0;  /* Timer has fired */
+
+  if (state->upscale_in_progress) {
+    return G_SOURCE_REMOVE;
+  }
+
+  /* Build enhanced surface if needed (may be NULL after render_state cleared it) */
+  EnhancePreset preset = (EnhancePreset)state->config->enhance_preset;
+  if (preset != ENHANCE_NONE) {
+    if (state->enhanced_surface) {
+      source_surface = state->enhanced_surface;
+    } else {
+      /* Build a temporary enhanced surface for the upscale */
+      temp_enhanced = enhance_surface(state->rendering_surface, preset);
+      if (temp_enhanced && cairo_surface_status(temp_enhanced) == CAIRO_STATUS_SUCCESS) {
+        source_surface = temp_enhanced;
+      } else {
+        if (temp_enhanced) cairo_surface_destroy(temp_enhanced);
+        source_surface = state->rendering_surface;
+      }
+    }
+  } else {
+    source_surface = state->rendering_surface;
+  }
+
+  if (!source_surface) {
+    if (temp_enhanced) cairo_surface_destroy(temp_enhanced);
+    return G_SOURCE_REMOVE;
+  }
+
+  source_width = cairo_image_surface_get_width(source_surface);
+  source_height = cairo_image_surface_get_height(source_surface);
+  if (source_width <= 0 || source_height <= 0) {
+    if (temp_enhanced) cairo_surface_destroy(temp_enhanced);
+    return G_SOURCE_REMOVE;
+  }
+
+  source_pixbuf = gdk_pixbuf_get_from_surface(source_surface, 0, 0,
+                                              source_width, source_height);
+  /* Clean up temporary enhanced surface after creating pixbuf */
+  if (temp_enhanced) {
+    cairo_surface_destroy(temp_enhanced);
+    temp_enhanced = NULL;
+  }
+
+  if (!source_pixbuf) {
+    g_warning("unable to build source pixbuf for async upscale");
+    return G_SOURCE_REMOVE;
+  }
+
+  state->upscale_in_progress = TRUE;
+  pixbuf_apply_upscale_command_async(state, source_pixbuf,
+                                     on_async_upscale_complete, state);
+  g_object_unref(source_pixbuf);
+
+  return G_SOURCE_REMOVE;
+}
+
+/* Public function to schedule async upscale preview */
+void schedule_upscale_preview(struct swappy_state *state) {
+  if (!state->config->upscale_command || state->config->upscale_command[0] == '\0') {
+    return;
+  }
+  if (state->upscale_in_progress) {
+    return;
+  }
+  if (state->upscale_debounce_id) {
+    g_source_remove(state->upscale_debounce_id);
+  }
+  state->upscale_debounce_id = g_timeout_add(500, trigger_async_upscale, state);
+}
+
+static void action_set_upscale_mode(struct swappy_state *state, gint mode) {
+  const char *command = upscale_command_from_mode(mode);
+
+  g_free(state->config->upscale_command);
+  state->config->upscale_command = command ? g_strdup(command) : NULL;
+  invalidate_upscaled_preview_cache(state);
+  g_info("upscale mode changed to: %d", mode);
+}
 
 // Show notification using notify-send
 static void show_notification(const char *title, const char *message) {
@@ -190,10 +433,26 @@ static void action_apply_crop(struct swappy_state *state) {
 
 void application_finish(struct swappy_state *state) {
   g_debug("application finishing, cleaning up");
+
+  /* Cancel any pending async upscale */
+  if (state->upscale_debounce_id) {
+    g_source_remove(state->upscale_debounce_id);
+    state->upscale_debounce_id = 0;
+  }
+
   paint_free_all(state);
   pixbuf_free(state);
   cairo_surface_destroy(state->rendering_surface);
   cairo_surface_destroy(state->original_image_surface);
+  if (state->enhanced_surface) {
+    cairo_surface_destroy(state->enhanced_surface);
+  }
+  if (state->upscaled_preview_surface) {
+    cairo_surface_destroy(state->upscaled_preview_surface);
+  }
+  if (state->upscaled_pixbuf_cache) {
+    g_object_unref(state->upscaled_pixbuf_cache);
+  }
   if (state->temp_file_str) {
     g_info("deleting temporary file: %s", state->temp_file_str);
     if (g_unlink(state->temp_file_str) != 0) {
@@ -272,6 +531,12 @@ static void hide_crop_box_if_visible(struct swappy_state *state) {
   if (state->ui->crop_box && gtk_widget_get_visible(GTK_WIDGET(state->ui->crop_box))) {
     gtk_widget_hide(GTK_WIDGET(state->ui->crop_box));
   }
+}
+
+static void switch_mode_to_pan(struct swappy_state *state) {
+  hide_crop_box_if_visible(state);
+  state->mode = SWAPPY_PAINT_MODE_PAN;
+  gtk_widget_set_sensitive(GTK_WIDGET(state->ui->fill_shape), false);
 }
 
 static void switch_mode_to_brush(struct swappy_state *state) {
@@ -504,11 +769,16 @@ static void commit_state(struct swappy_state *state) {
   paint_free_list(&state->redo_paints);
   render_state(state);
   update_ui_undo_redo(state);
+  schedule_upscale_preview(state);
 }
 
 void on_destroy(GtkApplication *application, gpointer data) {
   struct swappy_state *state = (struct swappy_state *)data;
   maybe_save_output_file(state);
+}
+
+void pan_clicked_handler(GtkWidget *widget, struct swappy_state *state) {
+  switch_mode_to_pan(state);
 }
 
 void brush_clicked_handler(GtkWidget *widget, struct swappy_state *state) {
@@ -616,6 +886,33 @@ void crop_swap_clicked_handler(GtkWidget *widget, struct swappy_state *state) {
 void crop_apply_clicked_handler(GtkWidget *widget, struct swappy_state *state) {
   if (state->mode == SWAPPY_PAINT_MODE_CROP && state->temp_paint) {
     action_apply_crop(state);
+  }
+}
+
+void enhance_preset_changed_handler(GtkWidget *widget, struct swappy_state *state) {
+  gint active = gtk_combo_box_get_active(GTK_COMBO_BOX(widget));
+  state->config->enhance_preset = (gint8)active;
+
+  /* Invalidate cached enhanced surface */
+  if (state->enhanced_surface) {
+    cairo_surface_destroy(state->enhanced_surface);
+    state->enhanced_surface = NULL;
+  }
+  state->enhanced_preset_cache = -1;  /* Mark as invalid */
+  invalidate_upscaled_preview_cache(state);
+
+  /* Trigger redraw to show preview */
+  if (state->ui && state->ui->area && GTK_IS_WIDGET(state->ui->area)) {
+    gtk_widget_queue_draw(state->ui->area);
+  }
+  g_info("Enhancement preset changed to: %d", active);
+}
+
+void upscale_mode_changed_handler(GtkWidget *widget, struct swappy_state *state) {
+  gint active = gtk_combo_box_get_active(GTK_COMBO_BOX(widget));
+  action_set_upscale_mode(state, active);
+  if (state->ui && state->ui->area && GTK_IS_WIDGET(state->ui->area)) {
+    gtk_widget_queue_draw(state->ui->area);
   }
 }
 
@@ -753,6 +1050,18 @@ void window_keypress_handler(GtkWidget *widget, GdkEventKey *event,
   } else {
     switch (event->keyval) {
       case GDK_KEY_Escape:
+        /* Cancel current operation and switch to pan mode */
+        if (state->temp_paint) {
+          /* Cancel any in-progress paint */
+          paint_free(state->temp_paint);
+          state->temp_paint = NULL;
+          render_state(state);
+        }
+        switch_mode_to_pan(state);
+        if (state->ui->pan) {
+          gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->ui->pan), true);
+        }
+        break;
       case GDK_KEY_q:
         maybe_save_output_file(state);
         gtk_main_quit();
@@ -904,13 +1213,45 @@ gboolean draw_area_handler(GtkWidget *widget, cairo_t *cr,
   gint image_height = gdk_pixbuf_get_height(image);
   double base_scale_x = (double)alloc->width / image_width;
   double base_scale_y = (double)alloc->height / image_height;
+  gdouble preview_scale_x = 1.0;
+  gdouble preview_scale_y = 1.0;
+
+  /* Rebuild enhanced preview if needed */
+  EnhancePreset preset = (EnhancePreset)state->config->enhance_preset;
+  if (preset != ENHANCE_NONE && state->enhanced_preset_cache != (gint8)preset) {
+    if (state->enhanced_surface) {
+      cairo_surface_destroy(state->enhanced_surface);
+    }
+    state->enhanced_surface = enhance_surface(state->rendering_surface, preset);
+    state->enhanced_preset_cache = preset;
+  }
+
+  /* Choose which surface to display */
+  cairo_surface_t *display_surface = (preset != ENHANCE_NONE && state->enhanced_surface)
+      ? state->enhanced_surface
+      : state->rendering_surface;
+
+  /* Use cached upscaled preview if available (built asynchronously) */
+  if (state->config->upscale_command && state->config->upscale_command[0] != '\0') {
+    if (state->upscaled_preview_surface && state->upscaled_preview_cache_valid) {
+      display_surface = state->upscaled_preview_surface;
+      if (state->upscaled_preview_scale_x > 0.0) {
+        preview_scale_x = state->upscaled_preview_scale_x;
+      }
+      if (state->upscaled_preview_scale_y > 0.0) {
+        preview_scale_y = state->upscaled_preview_scale_y;
+      }
+    }
+    /* Note: async upscale is triggered via debounced invalidate, not here */
+  }
 
   // Draw background
   cairo_set_source_rgb(cr, 0.2, 0.2, 0.2);
   cairo_paint(cr);
 
-  // Use Scale2x for zoom > 1.5x for sharp text/edges
-  if (state->zoom_level > 1.5) {
+  // Use Scale2x for zoom > 1.5x for sharp text/edges (disabled when using
+  // an external upscaled preview surface to preserve output mapping).
+  if (state->zoom_level > 1.5 && preview_scale_x == 1.0 && preview_scale_y == 1.0) {
     // Calculate effective scale (base_scale * zoom)
     double effective_scale = base_scale_x * state->zoom_level;
 
@@ -937,7 +1278,7 @@ gboolean draw_area_handler(GtkWidget *widget, cairo_t *cr,
     if (viewport_w > 0 && viewport_h > 0) {
       // Upscale the viewport region using Scale2x
       cairo_surface_t *upscaled = scale2x_viewport(
-        state->rendering_surface,
+        display_surface,
         viewport_x, viewport_y,
         viewport_w, viewport_h,
         scale2x_factor
@@ -964,12 +1305,12 @@ gboolean draw_area_handler(GtkWidget *widget, cairo_t *cr,
     }
   } else {
     // Standard Cairo rendering for low zoom levels
-    double scale_x = base_scale_x * state->zoom_level;
-    double scale_y = base_scale_y * state->zoom_level;
+    double scale_x = (base_scale_x * state->zoom_level) / preview_scale_x;
+    double scale_y = (base_scale_y * state->zoom_level) / preview_scale_y;
 
     cairo_translate(cr, state->pan_x, state->pan_y);
     cairo_scale(cr, scale_x, scale_y);
-    cairo_set_source_surface(cr, state->rendering_surface, 0, 0);
+    cairo_set_source_surface(cr, display_surface, 0, 0);
 
     cairo_pattern_t *pattern = cairo_get_source(cr);
     cairo_pattern_set_filter(pattern, CAIRO_FILTER_NEAREST);
@@ -1009,6 +1350,14 @@ void draw_area_button_press_handler(GtkWidget *widget, GdkEventButton *event,
     return;
   }
 
+  // Left click panning in pan mode
+  if (event->button == 1 && state->mode == SWAPPY_PAINT_MODE_PAN) {
+    state->is_panning = TRUE;
+    state->pan_start_x = event->x - state->pan_x;
+    state->pan_start_y = event->y - state->pan_y;
+    return;
+  }
+
   screen_coordinates_to_image_coordinates(state, event->x, event->y, &x, &y);
 
   if (event->button == 1) {
@@ -1035,10 +1384,15 @@ void draw_area_motion_notify_handler(GtkWidget *widget, GdkEventMotion *event,
                                      struct swappy_state *state) {
   gdouble x, y;
 
-  // Handle panning with middle mouse button
-  if (middle_button_pressed) {
-    state->pan_x = event->x - pan_start_x;
-    state->pan_y = event->y - pan_start_y;
+  // Handle panning with middle mouse button or pan tool
+  if (middle_button_pressed || state->is_panning) {
+    if (middle_button_pressed) {
+      state->pan_x = event->x - pan_start_x;
+      state->pan_y = event->y - pan_start_y;
+    } else {
+      state->pan_x = event->x - state->pan_start_x;
+      state->pan_y = event->y - state->pan_start_y;
+    }
     gtk_widget_queue_draw(state->ui->area);
     return;
   }
@@ -1047,8 +1401,13 @@ void draw_area_motion_notify_handler(GtkWidget *widget, GdkEventMotion *event,
 
   GdkDisplay *display = gdk_display_get_default();
   GdkWindow *window = event->window;
-  GdkCursor *crosshair = gdk_cursor_new_for_display(display, GDK_CROSSHAIR);
-  gdk_window_set_cursor(window, crosshair);
+  GdkCursor *cursor;
+  if (state->mode == SWAPPY_PAINT_MODE_PAN) {
+    cursor = gdk_cursor_new_for_display(display, state->is_panning ? GDK_FLEUR : GDK_HAND2);
+  } else {
+    cursor = gdk_cursor_new_for_display(display, GDK_CROSSHAIR);
+  }
+  gdk_window_set_cursor(window, cursor);
 
   gboolean is_button1_pressed = event->state & GDK_BUTTON1_MASK;
   gboolean is_control_pressed = event->state & GDK_CONTROL_MASK;
@@ -1108,13 +1467,19 @@ void draw_area_motion_notify_handler(GtkWidget *widget, GdkEventMotion *event,
     default:
       return;
   }
-  g_object_unref(crosshair);
+  g_object_unref(cursor);
 }
 void draw_area_button_release_handler(GtkWidget *widget, GdkEventButton *event,
                                       struct swappy_state *state) {
   // Handle middle button release for panning
   if (event->button == 2) {
     middle_button_pressed = FALSE;
+    return;
+  }
+
+  // Handle left button release for pan tool
+  if (event->button == 1 && state->is_panning) {
+    state->is_panning = FALSE;
     return;
   }
 
@@ -1459,6 +1824,8 @@ static bool load_layout(struct swappy_state *state) {
 
   state->ui->painting_box =
       GTK_BOX(gtk_builder_get_object(builder, "painting-box"));
+  GtkRadioButton *pan =
+      GTK_RADIO_BUTTON(gtk_builder_get_object(builder, "pan"));
   GtkRadioButton *brush =
       GTK_RADIO_BUTTON(gtk_builder_get_object(builder, "brush"));
   GtkRadioButton *text =
@@ -1471,6 +1838,12 @@ static bool load_layout(struct swappy_state *state) {
       GTK_RADIO_BUTTON(gtk_builder_get_object(builder, "arrow"));
   GtkRadioButton *blur =
       GTK_RADIO_BUTTON(gtk_builder_get_object(builder, "blur"));
+  GtkRadioButton *line =
+      GTK_RADIO_BUTTON(gtk_builder_get_object(builder, "line"));
+  GtkRadioButton *highlighter =
+      GTK_RADIO_BUTTON(gtk_builder_get_object(builder, "highlighter"));
+  GtkRadioButton *crop =
+      GTK_RADIO_BUTTON(gtk_builder_get_object(builder, "crop"));
 
   state->ui->red =
       GTK_RADIO_BUTTON(gtk_builder_get_object(builder, "color-red-button"));
@@ -1535,12 +1908,32 @@ static bool load_layout(struct swappy_state *state) {
   state->crop_settings.aspect_w = 0;
   state->crop_settings.aspect_h = 0;
 
+  // Enhancement preset combo
+  state->ui->enhance_preset_combo =
+      GTK_COMBO_BOX_TEXT(gtk_builder_get_object(builder, "enhance-preset-combo"));
+  if (state->ui->enhance_preset_combo) {
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state->ui->enhance_preset_combo),
+                             state->config->enhance_preset);
+  }
+
+  // Upscale mode combo
+  state->ui->upscale_mode_combo =
+      GTK_COMBO_BOX_TEXT(gtk_builder_get_object(builder, "upscale-mode-combo"));
+  if (state->ui->upscale_mode_combo) {
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state->ui->upscale_mode_combo),
+                             upscale_mode_from_command(state->config->upscale_command));
+  }
+
+  state->ui->pan = pan;
   state->ui->brush = brush;
+  state->ui->highlighter = highlighter;
   state->ui->text = text;
   state->ui->rectangle = rectangle;
   state->ui->ellipse = ellipse;
   state->ui->arrow = arrow;
+  state->ui->line = line;
   state->ui->blur = blur;
+  state->ui->crop = crop;
   state->ui->area = area;
   state->ui->window = window;
 
@@ -1556,6 +1949,12 @@ static bool load_layout(struct swappy_state *state) {
 
 static void set_paint_mode(struct swappy_state *state) {
   switch (state->mode) {
+    case SWAPPY_PAINT_MODE_PAN:
+      if (state->ui->pan) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->ui->pan), true);
+      }
+      gtk_widget_set_sensitive(GTK_WIDGET(state->ui->fill_shape), false);
+      break;
     case SWAPPY_PAINT_MODE_BRUSH:
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->ui->brush), true);
       gtk_widget_set_sensitive(GTK_WIDGET(state->ui->fill_shape), false);
@@ -1579,6 +1978,24 @@ static void set_paint_mode(struct swappy_state *state) {
       break;
     case SWAPPY_PAINT_MODE_BLUR:
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->ui->blur), true);
+      gtk_widget_set_sensitive(GTK_WIDGET(state->ui->fill_shape), false);
+      break;
+    case SWAPPY_PAINT_MODE_LINE:
+      if (state->ui->line) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->ui->line), true);
+      }
+      gtk_widget_set_sensitive(GTK_WIDGET(state->ui->fill_shape), false);
+      break;
+    case SWAPPY_PAINT_MODE_HIGHLIGHTER:
+      if (state->ui->highlighter) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->ui->highlighter), true);
+      }
+      gtk_widget_set_sensitive(GTK_WIDGET(state->ui->fill_shape), false);
+      break;
+    case SWAPPY_PAINT_MODE_CROP:
+      if (state->ui->crop) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->ui->crop), true);
+      }
       gtk_widget_set_sensitive(GTK_WIDGET(state->ui->fill_shape), false);
       break;
     default:

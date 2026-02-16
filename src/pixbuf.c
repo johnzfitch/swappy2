@@ -1,13 +1,302 @@
 #include "pixbuf.h"
 
 #include <cairo/cairo.h>
+#include <gio/gio.h>
 #include <gio/gunixoutputstream.h>
+#include <glib.h>
+#include <glib/gstdio.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "enhance.h"
+
+static void write_file(GdkPixbuf *pixbuf, char *path);
+
+/* Data passed to async upscale thread */
+typedef struct {
+  gchar *upscale_command;
+  gchar *in_path;
+  gchar *out_path;
+} UpscaleTaskData;
+
+static void upscale_task_data_free(UpscaleTaskData *data) {
+  if (data->in_path) {
+    g_unlink(data->in_path);
+    g_free(data->in_path);
+  }
+  if (data->out_path) {
+    g_unlink(data->out_path);
+    g_free(data->out_path);
+  }
+  g_free(data->upscale_command);
+  g_free(data);
+}
+
+/*
+ * Flatten a surface by compositing it over the preview background color.
+ * This ensures saved images match what users see in the preview.
+ */
+static cairo_surface_t *flatten_surface(cairo_surface_t *src, int width, int height) {
+  cairo_surface_t *flat = cairo_image_surface_create(CAIRO_FORMAT_RGB24, width, height);
+  if (cairo_surface_status(flat) != CAIRO_STATUS_SUCCESS) {
+    return NULL;
+  }
+
+  cairo_t *cr = cairo_create(flat);
+
+  /* Fill with the same background color used in preview (0.2, 0.2, 0.2) */
+  cairo_set_source_rgb(cr, 0.2, 0.2, 0.2);
+  cairo_paint(cr);
+
+  /* Composite the source surface over the background */
+  cairo_set_source_surface(cr, src, 0, 0);
+  cairo_paint(cr);
+
+  cairo_destroy(cr);
+  return flat;
+}
+
+static gchar *replace_token(const gchar *source, const gchar *token,
+                            const gchar *replacement) {
+  gsize token_len = strlen(token);
+  const gchar *cursor = source;
+  const gchar *match = NULL;
+  GString *out = g_string_new(NULL);
+
+  while ((match = g_strstr_len(cursor, -1, token)) != NULL) {
+    g_string_append_len(out, cursor, match - cursor);
+    g_string_append(out, replacement);
+    cursor = match + token_len;
+  }
+
+  g_string_append(out, cursor);
+  return g_string_free(out, FALSE);
+}
+
+GdkPixbuf *pixbuf_apply_upscale_command(struct swappy_state *state,
+                                        GdkPixbuf *pixbuf) {
+  const gchar *template = state->config->upscale_command;
+  if (!template || template[0] == '\0') {
+    return NULL;
+  }
+
+  if (!g_strstr_len(template, -1, "%INPUT%") ||
+      !g_strstr_len(template, -1, "%OUTPUT%")) {
+    g_warning("upscale_command must contain both %%INPUT%% and %%OUTPUT%% placeholders");
+    return NULL;
+  }
+
+  gchar in_name[] = "swappy-upscale-input-XXXXXX.png";
+  gchar out_name[] = "swappy-upscale-output-XXXXXX.png";
+  gchar *in_path = g_build_filename(g_get_tmp_dir(), in_name, NULL);
+  gchar *out_path = g_build_filename(g_get_tmp_dir(), out_name, NULL);
+  gint in_fd = g_mkstemp(in_path);
+  gint out_fd = g_mkstemp(out_path);
+  gchar *cmd_with_input = NULL;
+  gchar *command = NULL;
+  GError *error = NULL;
+  gint status = 0;
+  GdkPixbuf *upscaled = NULL;
+
+  if (in_fd == -1 || out_fd == -1) {
+    g_warning("unable to create temporary files for upscaling");
+    goto cleanup;
+  }
+
+  close(in_fd);
+  close(out_fd);
+  write_file(pixbuf, in_path);
+
+  cmd_with_input = replace_token(template, "%INPUT%", in_path);
+  command = replace_token(cmd_with_input, "%OUTPUT%", out_path);
+
+  if (!g_spawn_command_line_sync(command, NULL, NULL, &status, &error)) {
+    g_warning("failed to execute upscale_command: %s", error->message);
+    g_clear_error(&error);
+    goto cleanup;
+  }
+
+  if (!g_spawn_check_wait_status(status, &error)) {
+    g_warning("upscale_command returned a non-zero status: %s", error->message);
+    g_clear_error(&error);
+    goto cleanup;
+  }
+
+  if (!g_file_test(out_path, G_FILE_TEST_EXISTS)) {
+    g_warning("upscale_command did not create output file: %s", out_path);
+    goto cleanup;
+  }
+
+  upscaled = gdk_pixbuf_new_from_file(out_path, &error);
+  if (!upscaled) {
+    g_warning("unable to read upscaled output file: %s", error->message);
+    g_clear_error(&error);
+  } else {
+    g_info("upscale_command applied successfully");
+  }
+
+cleanup:
+  if (in_path) {
+    g_unlink(in_path);
+  }
+  if (out_path) {
+    g_unlink(out_path);
+  }
+  g_free(in_path);
+  g_free(out_path);
+  g_free(cmd_with_input);
+  g_free(command);
+  return upscaled;
+}
+
+/* Thread function for async upscaling */
+static void upscale_thread_func(GTask *task, gpointer source_object,
+                                gpointer task_data, GCancellable *cancellable) {
+  UpscaleTaskData *data = task_data;
+  GError *error = NULL;
+  gint status = 0;
+  GdkPixbuf *upscaled = NULL;
+
+  if (g_task_return_error_if_cancelled(task)) {
+    return;
+  }
+
+  if (!g_spawn_command_line_sync(data->upscale_command, NULL, NULL, &status, &error)) {
+    g_task_return_error(task, error);
+    return;
+  }
+
+  if (!g_spawn_check_wait_status(status, &error)) {
+    g_task_return_error(task, error);
+    return;
+  }
+
+  if (!g_file_test(data->out_path, G_FILE_TEST_EXISTS)) {
+    g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+                            "upscale_command did not create output file: %s", data->out_path);
+    return;
+  }
+
+  upscaled = gdk_pixbuf_new_from_file(data->out_path, &error);
+  if (!upscaled) {
+    g_task_return_error(task, error);
+    return;
+  }
+
+  g_info("async upscale_command completed successfully");
+  g_task_return_pointer(task, upscaled, g_object_unref);
+}
+
+void pixbuf_apply_upscale_command_async(struct swappy_state *state,
+                                        GdkPixbuf *pixbuf,
+                                        GAsyncReadyCallback callback,
+                                        gpointer user_data) {
+  const gchar *template = state->config->upscale_command;
+  if (!template || template[0] == '\0') {
+    GTask *task = g_task_new(NULL, NULL, callback, user_data);
+    g_task_return_pointer(task, NULL, NULL);
+    g_object_unref(task);
+    return;
+  }
+
+  if (!g_strstr_len(template, -1, "%INPUT%") ||
+      !g_strstr_len(template, -1, "%OUTPUT%")) {
+    g_warning("upscale_command must contain both %%INPUT%% and %%OUTPUT%% placeholders");
+    GTask *task = g_task_new(NULL, NULL, callback, user_data);
+    g_task_return_pointer(task, NULL, NULL);
+    g_object_unref(task);
+    return;
+  }
+
+  gchar in_name[] = "swappy-upscale-input-XXXXXX.png";
+  gchar out_name[] = "swappy-upscale-output-XXXXXX.png";
+  gchar *in_path = g_build_filename(g_get_tmp_dir(), in_name, NULL);
+  gchar *out_path = g_build_filename(g_get_tmp_dir(), out_name, NULL);
+  gint in_fd = g_mkstemp(in_path);
+  gint out_fd = g_mkstemp(out_path);
+
+  if (in_fd == -1 || out_fd == -1) {
+    g_warning("unable to create temporary files for async upscaling");
+    g_free(in_path);
+    g_free(out_path);
+    GTask *task = g_task_new(NULL, NULL, callback, user_data);
+    g_task_return_pointer(task, NULL, NULL);
+    g_object_unref(task);
+    return;
+  }
+
+  close(in_fd);
+  close(out_fd);
+  write_file(pixbuf, in_path);
+
+  gchar *cmd_with_input = replace_token(template, "%INPUT%", in_path);
+  gchar *command = replace_token(cmd_with_input, "%OUTPUT%", out_path);
+  g_free(cmd_with_input);
+
+  UpscaleTaskData *data = g_new0(UpscaleTaskData, 1);
+  data->upscale_command = command;
+  data->in_path = in_path;
+  data->out_path = out_path;
+
+  GTask *task = g_task_new(NULL, NULL, callback, user_data);
+  g_task_set_task_data(task, data, (GDestroyNotify)upscale_task_data_free);
+  g_task_run_in_thread(task, upscale_thread_func);
+  g_object_unref(task);
+
+  g_info("async upscale started");
+}
+
+GdkPixbuf *pixbuf_apply_upscale_command_finish(GAsyncResult *result,
+                                               GError **error) {
+  return g_task_propagate_pointer(G_TASK(result), error);
+}
 
 GdkPixbuf *pixbuf_get_from_state(struct swappy_state *state) {
   guint width = cairo_image_surface_get_width(state->rendering_surface);
   guint height = cairo_image_surface_get_height(state->rendering_surface);
-  GdkPixbuf *pixbuf = gdk_pixbuf_get_from_surface(state->rendering_surface, 0,
-                                                  0, width, height);
+
+  cairo_surface_t *surface_to_save = state->rendering_surface;
+  cairo_surface_t *enhanced = NULL;
+  cairo_surface_t *flattened = NULL;
+
+  /* Apply image enhancement if configured */
+  EnhancePreset preset = (EnhancePreset)state->config->enhance_preset;
+  if (preset != ENHANCE_NONE) {
+    enhanced = enhance_surface(state->rendering_surface, preset);
+    if (enhanced && cairo_surface_status(enhanced) == CAIRO_STATUS_SUCCESS) {
+      surface_to_save = enhanced;
+      g_info("Applied enhancement preset: %s", enhance_preset_name(preset));
+    }
+  }
+
+  /* Flatten the surface (composite over background) so saved image matches preview */
+  flattened = flatten_surface(surface_to_save, width, height);
+  if (flattened && cairo_surface_status(flattened) == CAIRO_STATUS_SUCCESS) {
+    surface_to_save = flattened;
+  }
+
+  GdkPixbuf *pixbuf = gdk_pixbuf_get_from_surface(surface_to_save, 0, 0, width, height);
+
+  if (flattened) {
+    cairo_surface_destroy(flattened);
+  }
+  if (enhanced) {
+    cairo_surface_destroy(enhanced);
+  }
+
+  /* Reuse cached upscaled pixbuf if available (from async preview) */
+  if (state->upscaled_pixbuf_cache) {
+    g_object_unref(pixbuf);
+    pixbuf = g_object_ref(state->upscaled_pixbuf_cache);
+    g_info("reusing cached upscaled pixbuf for save");
+  } else {
+    /* Fallback to sync upscale if no cache (blocking but only on save) */
+    GdkPixbuf *upscaled = pixbuf_apply_upscale_command(state, pixbuf);
+    if (upscaled) {
+      g_object_unref(pixbuf);
+      pixbuf = upscaled;
+    }
+  }
 
   return pixbuf;
 }

@@ -4,6 +4,14 @@
 
 GdkPixbuf *pixbuf_init_from_file(struct swappy_state *state);
 GdkPixbuf *pixbuf_get_from_state(struct swappy_state *state);
+GdkPixbuf *pixbuf_apply_upscale_command(struct swappy_state *state,
+                                        GdkPixbuf *pixbuf);
+void pixbuf_apply_upscale_command_async(struct swappy_state *state,
+                                        GdkPixbuf *pixbuf,
+                                        GAsyncReadyCallback callback,
+                                        gpointer user_data);
+GdkPixbuf *pixbuf_apply_upscale_command_finish(GAsyncResult *result,
+                                               GError **error);
 void pixbuf_save_state_to_folder(GdkPixbuf *pixbuf, char *folder,
                                  char *filename_format);
 void pixbuf_save_to_file(GdkPixbuf *pixbuf, char *file);

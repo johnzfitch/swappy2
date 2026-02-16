@@ -18,7 +18,8 @@
 #define SWAPPY_TRANSPARENCY_MAX 95
 
 enum swappy_paint_type {
-  SWAPPY_PAINT_MODE_BRUSH = 0, /* Brush mode to draw arbitrary shapes */
+  SWAPPY_PAINT_MODE_PAN = 0,   /* Pan/drag mode to navigate viewport */
+  SWAPPY_PAINT_MODE_BRUSH,     /* Brush mode to draw arbitrary shapes */
   SWAPPY_PAINT_MODE_TEXT,      /* Mode to draw texts */
   SWAPPY_PAINT_MODE_RECTANGLE, /* Rectangle shapes */
   SWAPPY_PAINT_MODE_ELLIPSE,   /* Ellipse shapes */
@@ -136,12 +137,16 @@ struct swappy_state_ui {
 
   // Painting Area
   GtkBox *painting_box;
+  GtkRadioButton *pan;
   GtkRadioButton *brush;
+  GtkRadioButton *highlighter;
   GtkRadioButton *text;
   GtkRadioButton *rectangle;
   GtkRadioButton *ellipse;
   GtkRadioButton *arrow;
+  GtkRadioButton *line;
   GtkRadioButton *blur;
+  GtkRadioButton *crop;
 
   GtkRadioButton *red;
   GtkRadioButton *green;
@@ -167,12 +172,17 @@ struct swappy_state_ui {
   GtkSpinButton *crop_height_spin;
   GtkButton *crop_swap_button;
   GtkButton *crop_apply_button;
+
+  // Enhancement controls
+  GtkComboBoxText *enhance_preset_combo;
+  GtkComboBoxText *upscale_mode_combo;
 };
 
 struct swappy_config {
   char *config_file;
   char *save_dir;
   char *save_filename_format;
+  char *upscale_command;
   gint8 paint_mode;
   gboolean fill_shape;
   gboolean transparent;
@@ -184,6 +194,7 @@ struct swappy_config {
   gboolean early_exit;
   gboolean auto_save;
   char *custom_color;
+  gint8 enhance_preset;  /* Image enhancement level (0=none, 1=subtle, 2=standard, 3=vivid, 4=text) */
 };
 
 struct swappy_state {
@@ -195,11 +206,23 @@ struct swappy_state {
   GdkPixbuf *original_image;
   cairo_surface_t *original_image_surface;
   cairo_surface_t *rendering_surface;
+  cairo_surface_t *enhanced_surface;  /* Cached preview with enhancement */
+  gint8 enhanced_preset_cache;        /* Which preset the cache was built with */
+  cairo_surface_t *upscaled_preview_surface;  /* Cached preview with upscale command */
+  gdouble upscaled_preview_scale_x;           /* Source-to-preview width multiplier */
+  gdouble upscaled_preview_scale_y;           /* Source-to-preview height multiplier */
+  gboolean upscaled_preview_cache_valid;      /* Avoid recomputing failed previews every frame */
+  gboolean upscale_in_progress;               /* Async upscale currently running */
+  guint upscale_debounce_id;                  /* Timer ID for debounced upscale */
+  GdkPixbuf *upscaled_pixbuf_cache;           /* Cached result for reuse in save */
 
   gdouble scaling_factor;
   gdouble zoom_level;      // Current zoom level (1.0 = 100%)
   gdouble pan_x;           // Pan offset X
   gdouble pan_y;           // Pan offset Y
+  gboolean is_panning;     // Currently dragging to pan
+  gdouble pan_start_x;     // Mouse X when pan started
+  gdouble pan_start_y;     // Mouse Y when pan started
 
   enum swappy_paint_type mode;
 

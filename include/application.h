@@ -63,3 +63,10 @@ void transparency_decrease_handler(GtkWidget *widget,
 void transparency_reset_handler(GtkWidget *widget, struct swappy_state *state);
 void transparency_increase_handler(GtkWidget *widget,
                                    struct swappy_state *state);
+void enhance_preset_changed_handler(GtkWidget *widget,
+                                    struct swappy_state *state);
+void upscale_mode_changed_handler(GtkWidget *widget,
+                                  struct swappy_state *state);
+
+/* Schedule async upscale preview (debounced) */
+void schedule_upscale_preview(struct swappy_state *state);

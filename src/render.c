@@ -576,6 +576,26 @@ void render_state(struct swappy_state *state) {
 
   cairo_destroy(cr);
 
+  /* Invalidate enhanced preview cache since content changed */
+  if (state->enhanced_surface) {
+    cairo_surface_destroy(state->enhanced_surface);
+    state->enhanced_surface = NULL;
+  }
+  state->enhanced_preset_cache = -1;
+  if (state->upscaled_preview_surface) {
+    cairo_surface_destroy(state->upscaled_preview_surface);
+    state->upscaled_preview_surface = NULL;
+  }
+  if (state->upscaled_pixbuf_cache) {
+    g_object_unref(state->upscaled_pixbuf_cache);
+    state->upscaled_pixbuf_cache = NULL;
+  }
+  state->upscaled_preview_scale_x = 1.0;
+  state->upscaled_preview_scale_y = 1.0;
+  state->upscaled_preview_cache_valid = FALSE;
+
   // Drawing is finished, notify the GtkDrawingArea it needs to be redrawn.
-  gtk_widget_queue_draw(state->ui->area);
+  if (state->ui && state->ui->area && GTK_IS_WIDGET(state->ui->area)) {
+    gtk_widget_queue_draw(state->ui->area);
+  }
 }
