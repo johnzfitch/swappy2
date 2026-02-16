@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: comfy-upscale <input.png> <output.png>
+
+Environment:
+  COMFYUI_URL                    default: http://127.0.0.1:8188
+  COMFYUI_OUTPUT_DIR             default: ~/ComfyUI/output
+  COMFYUI_PIPELINE               default: esrgan (esrgan|supir|diffbir|hypir)
+  COMFYUI_TIMEOUT_SECONDS        default: 300
+  COMFYUI_POLL_INTERVAL_SECONDS  default: 1
+
+  COMFYUI_UPSCALE_MODEL          ESRGAN model (default: first installed)
+
+  COMFYUI_SUPIR_WORKFLOW         default: ~/gfx/workflows/api/benchmark-03-supir-restoration.api.json
+  COMFYUI_SUPIR_MODEL            default: SUPIR-v0Q.ckpt
+
+  COMFYUI_DIFFBIR_WORKFLOW       default: ~/gfx/workflows/api/benchmark-05-diffbir-bsr.api.json
+
+  COMFYUI_HYPIR_WORKFLOW         default: ~/gfx/workflows/api/benchmark-04-hypir-restoration.api.json
+  COMFYUI_HYPIR_MODEL            default: HYPIR_sd2
+
+  COMFYUI_UPSCALE_FACTOR         optional integer/float for hypir/diffbir override
+  COMFYUI_CACHE_DISABLE          set to 1 to disable content-hash caching
+EOF
+  exit 2
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "required command missing: $1" >&2
+    exit 2
+  }
+}
+
+if [[ $# -ne 2 ]]; then
+  usage
+fi
+
+INPUT_PATH="$1"
+OUTPUT_PATH="$2"
+[[ -f "$INPUT_PATH" ]] || {
+  echo "input file not found: $INPUT_PATH" >&2
+  exit 2
+}
+
+require_cmd curl
+require_cmd jq
+require_cmd sha256sum
+
+COMFYUI_URL="${COMFYUI_URL:-http://127.0.0.1:8188}"
+COMFYUI_OUTPUT_DIR="${COMFYUI_OUTPUT_DIR:-$HOME/ComfyUI/output}"
+COMFYUI_PIPELINE="${COMFYUI_PIPELINE:-esrgan}"
+COMFYUI_TIMEOUT_SECONDS="${COMFYUI_TIMEOUT_SECONDS:-300}"
+COMFYUI_POLL_INTERVAL_SECONDS="${COMFYUI_POLL_INTERVAL_SECONDS:-1}"
+COMFYUI_CACHE_DISABLE="${COMFYUI_CACHE_DISABLE:-}"
+
+COMFYUI_UPSCALE_MODEL="${COMFYUI_UPSCALE_MODEL:-}"
+COMFYUI_SUPIR_WORKFLOW="${COMFYUI_SUPIR_WORKFLOW:-$HOME/gfx/workflows/api/benchmark-03-supir-restoration.api.json}"
+COMFYUI_SUPIR_MODEL="${COMFYUI_SUPIR_MODEL:-SUPIR-v0Q.ckpt}"
+COMFYUI_DIFFBIR_WORKFLOW="${COMFYUI_DIFFBIR_WORKFLOW:-$HOME/gfx/workflows/api/benchmark-05-diffbir-bsr.api.json}"
+COMFYUI_HYPIR_WORKFLOW="${COMFYUI_HYPIR_WORKFLOW:-$HOME/gfx/workflows/api/benchmark-04-hypir-restoration.api.json}"
+COMFYUI_HYPIR_MODEL="${COMFYUI_HYPIR_MODEL:-HYPIR_sd2}"
+COMFYUI_UPSCALE_FACTOR="${COMFYUI_UPSCALE_FACTOR:-}"
+
+# Build cache key from content hash + pipeline + model
+build_cache_key() {
+  local content_hash model_id
+  content_hash="$(sha256sum "$INPUT_PATH" | cut -c1-16)"
+
+  case "$COMFYUI_PIPELINE" in
+    esrgan)
+      model_id="${COMFYUI_UPSCALE_MODEL:-default}"
+      ;;
+    supir)
+      model_id="${COMFYUI_SUPIR_MODEL}"
+      ;;
+    hypir)
+      model_id="${COMFYUI_HYPIR_MODEL}"
+      ;;
+    diffbir)
+      model_id="diffbir"
+      ;;
+    *)
+      model_id="unknown"
+      ;;
+  esac
+
+  # Sanitize model_id for filesystem
+  model_id="${model_id//\//_}"
+  model_id="${model_id//./_}"
+
+  echo "swappy/${COMFYUI_PIPELINE}_${model_id}_${content_hash}"
+}
+
+CACHE_KEY="$(build_cache_key)"
+CACHE_DIR="$COMFYUI_OUTPUT_DIR/swappy"
+
+# Check for cached result
+if [[ -z "$COMFYUI_CACHE_DISABLE" && -d "$CACHE_DIR" ]]; then
+  # Look for file matching our cache key pattern
+  cached_file="$(find "$CACHE_DIR" -maxdepth 1 -name "${CACHE_KEY##*/}_*.png" -type f 2>/dev/null | head -1)"
+  if [[ -n "$cached_file" && -f "$cached_file" ]]; then
+    echo "cache hit: $cached_file" >&2
+    cp "$cached_file" "$OUTPUT_PATH"
+    exit 0
+  fi
+fi
+
+# No cache hit - run the workflow
+COMFYUI_FILENAME_PREFIX="$CACHE_KEY"
+
+upload_json="$(
+  curl -fsS -X POST \
+    -F "image=@${INPUT_PATH}" \
+    -F "type=input" \
+    -F "overwrite=true" \
+    "$COMFYUI_URL/upload/image"
+)"
+
+upload_name="$(jq -r '.name' <<<"$upload_json")"
+upload_subfolder="$(jq -r '.subfolder' <<<"$upload_json")"
+if [[ -z "$upload_name" || "$upload_name" == "null" ]]; then
+  echo "ComfyUI upload failed: $upload_json" >&2
+  exit 1
+fi
+if [[ -n "$upload_subfolder" && "$upload_subfolder" != "null" ]]; then
+  workflow_image_path="${upload_subfolder}/${upload_name}"
+else
+  workflow_image_path="$upload_name"
+fi
+
+build_esrgan_prompt() {
+  local model="$COMFYUI_UPSCALE_MODEL"
+  if [[ -z "$model" ]]; then
+    model="$(
+      curl -fsS "$COMFYUI_URL/object_info/UpscaleModelLoader" \
+        | jq -r '.UpscaleModelLoader.input.required.model_name[1].options[0]'
+    )"
+  fi
+  if [[ -z "$model" || "$model" == "null" ]]; then
+    echo "unable to resolve ESRGAN model from ComfyUI" >&2
+    exit 1
+  fi
+
+  jq -n \
+    --arg image "$workflow_image_path" \
+    --arg model "$model" \
+    --arg prefix "$COMFYUI_FILENAME_PREFIX" \
+    '{
+      "1": { "class_type": "LoadImage", "inputs": { "image": $image } },
+      "2": { "class_type": "UpscaleModelLoader", "inputs": { "model_name": $model } },
+      "3": { "class_type": "ImageUpscaleWithModel", "inputs": { "upscale_model": ["2", 0], "image": ["1", 0] } },
+      "4": { "class_type": "SaveImage", "inputs": { "filename_prefix": $prefix, "images": ["3", 0] } }
+    }'
+}
+
+patch_workflow_prompt() {
+  local workflow_file="$1"
+  [[ -f "$workflow_file" ]] || {
+    echo "workflow not found: $workflow_file" >&2
+    exit 1
+  }
+
+  local jq_expr='
+    . as $root
+    | ($root | to_entries | map(select(.value.class_type=="LoadImage") | .key) | .[0]) as $load_id
+    | ($root | to_entries | map(select(.value.class_type=="SaveImage") | .key) | .[0]) as $save_id
+    | if $load_id then .[$load_id].inputs.image = $image else . end
+    | if $save_id then .[$save_id].inputs.filename_prefix = $prefix else . end
+  '
+
+  case "$COMFYUI_PIPELINE" in
+    supir)
+      jq_expr+='
+        | ($root | to_entries | map(select(.value.class_type=="SUPIR_model_loader_v2") | .key) | .[0]) as $supir_loader_id
+        | if $supir_loader_id then .[$supir_loader_id].inputs.supir_model = $supir_model else . end
+      '
+      ;;
+    diffbir)
+      jq_expr+='
+        | ($root | to_entries | map(select(.value.class_type=="DiffBIR_sample") | .key) | .[0]) as $diffbir_id
+        | if ($diffbir_id and ($upscale_factor|length)>0) then .[$diffbir_id].inputs.upscale_ratio = ($upscale_factor|tonumber) else . end
+      '
+      ;;
+    hypir)
+      jq_expr+='
+        | ($root | to_entries | map(select(.value.class_type=="HYPIRAdvancedRestoration") | .key) | .[0]) as $hypir_id
+        | if $hypir_id then .[$hypir_id].inputs.model_name = $hypir_model else . end
+        | if ($hypir_id and ($upscale_factor|length)>0) then .[$hypir_id].inputs.upscale_factor = ($upscale_factor|tonumber) else . end
+      '
+      ;;
+  esac
+
+  jq \
+    --arg image "$workflow_image_path" \
+    --arg prefix "$COMFYUI_FILENAME_PREFIX" \
+    --arg supir_model "$COMFYUI_SUPIR_MODEL" \
+    --arg hypir_model "$COMFYUI_HYPIR_MODEL" \
+    --arg upscale_factor "$COMFYUI_UPSCALE_FACTOR" \
+    "$jq_expr" \
+    "$workflow_file"
+}
+
+case "$COMFYUI_PIPELINE" in
+  esrgan)
+    prompt_graph="$(build_esrgan_prompt)"
+    ;;
+  supir)
+    prompt_graph="$(patch_workflow_prompt "$COMFYUI_SUPIR_WORKFLOW")"
+    ;;
+  diffbir)
+    prompt_graph="$(patch_workflow_prompt "$COMFYUI_DIFFBIR_WORKFLOW")"
+    ;;
+  hypir)
+    prompt_graph="$(patch_workflow_prompt "$COMFYUI_HYPIR_WORKFLOW")"
+    ;;
+  *)
+    echo "unsupported COMFYUI_PIPELINE: $COMFYUI_PIPELINE" >&2
+    exit 2
+    ;;
+esac
+
+client_id="$(cat /proc/sys/kernel/random/uuid)"
+prompt_json="$(jq -n --arg cid "$client_id" --argjson prompt "$prompt_graph" '{client_id:$cid,prompt:$prompt}')"
+prompt_response="$(
+  curl -fsS \
+    -H "Content-Type: application/json" \
+    -d "$prompt_json" \
+    "$COMFYUI_URL/prompt"
+)"
+
+prompt_id="$(jq -r '.prompt_id' <<<"$prompt_response")"
+if [[ -z "$prompt_id" || "$prompt_id" == "null" ]]; then
+  echo "ComfyUI prompt submission failed: $prompt_response" >&2
+  exit 1
+fi
+
+echo "queued: $prompt_id (prefix: $COMFYUI_FILENAME_PREFIX)" >&2
+
+deadline=$((SECONDS + COMFYUI_TIMEOUT_SECONDS))
+output_image_json=""
+while (( SECONDS < deadline )); do
+  history_json="$(curl -fsS "$COMFYUI_URL/history/$prompt_id")"
+  output_image_json="$(
+    jq -c --arg pid "$prompt_id" '
+      .[$pid].outputs // {}
+      | to_entries
+      | map(.value.images // [])
+      | flatten
+      | map(select(.type=="output"))
+      | .[0] // empty
+    ' <<<"$history_json"
+  )"
+
+  if [[ -n "$output_image_json" ]]; then
+    break
+  fi
+  sleep "$COMFYUI_POLL_INTERVAL_SECONDS"
+done
+
+if [[ -z "$output_image_json" ]]; then
+  echo "timeout waiting for ComfyUI output (prompt_id=$prompt_id)" >&2
+  exit 1
+fi
+
+out_filename="$(jq -r '.filename' <<<"$output_image_json")"
+out_subfolder="$(jq -r '.subfolder' <<<"$output_image_json")"
+
+# Copy from ComfyUI output dir directly (faster than HTTP download)
+comfy_output_file="$COMFYUI_OUTPUT_DIR/$out_subfolder/$out_filename"
+if [[ -f "$comfy_output_file" ]]; then
+  cp "$comfy_output_file" "$OUTPUT_PATH"
+  echo "completed: $comfy_output_file" >&2
+else
+  # Fallback to HTTP download
+  out_type="$(jq -r '.type' <<<"$output_image_json")"
+  curl -fsS \
+    "$COMFYUI_URL/view?filename=${out_filename}&subfolder=${out_subfolder}&type=${out_type}" \
+    -o "$OUTPUT_PATH"
+  echo "downloaded: $out_filename" >&2
+fi
+
+if [[ ! -s "$OUTPUT_PATH" ]]; then
+  echo "output is empty: $OUTPUT_PATH" >&2
+  exit 1
+fi
