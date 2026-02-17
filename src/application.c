@@ -51,27 +51,6 @@ static const char *upscale_command_from_mode(gint mode) {
   }
 }
 
-static gint upscale_mode_from_command(const char *command) {
-  if (!command || command[0] == '\0') {
-    return UPSCALE_MODE_OFF;
-  }
-
-  if (g_strcmp0(command, UPSCALE_COMMAND_MANUAL_4X) == 0) {
-    return UPSCALE_MODE_MANUAL_4X;
-  }
-  if (g_strcmp0(command, UPSCALE_COMMAND_ESRGAN) == 0) {
-    return UPSCALE_MODE_ESRGAN;
-  }
-  if (g_strcmp0(command, UPSCALE_COMMAND_HYPIR) == 0) {
-    return UPSCALE_MODE_HYPIR;
-  }
-  if (g_strcmp0(command, UPSCALE_COMMAND_SUPIR) == 0) {
-    return UPSCALE_MODE_SUPIR;
-  }
-
-  return UPSCALE_MODE_OFF;
-}
-
 static void clear_upscaled_preview_cache(struct swappy_state *state) {
   if (state->upscaled_preview_surface) {
     cairo_surface_destroy(state->upscaled_preview_surface);
@@ -1916,12 +1895,15 @@ static bool load_layout(struct swappy_state *state) {
                              state->config->enhance_preset);
   }
 
-  // Upscale mode combo
+  // Upscale mode combo - always start with upscale OFF to prevent race conditions
   state->ui->upscale_mode_combo =
       GTK_COMBO_BOX_TEXT(gtk_builder_get_object(builder, "upscale-mode-combo"));
   if (state->ui->upscale_mode_combo) {
+    // Force upscale off on startup regardless of config
+    g_free(state->config->upscale_command);
+    state->config->upscale_command = NULL;
     gtk_combo_box_set_active(GTK_COMBO_BOX(state->ui->upscale_mode_combo),
-                             upscale_mode_from_command(state->config->upscale_command));
+                             UPSCALE_MODE_OFF);
   }
 
   state->ui->pan = pan;
